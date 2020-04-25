@@ -1,3 +1,6 @@
+
+
+##libraries used
 library(dplyr) ;
 library(ragtop);
 library(tidyr);
@@ -10,8 +13,11 @@ library(boot);
 library(data.table);
 library(RColorBrewer);
 library(BBmisc);
+library(plotrix);
 library(corrplot);
+library(pROC)
 
+#Reading data from source
 all_data <- read.csv('listings.csv', stringsAsFactors= F, header = T, colClasses=c("id"="integer")) #, na.strings=c("",'N/A')
 
 sel <- dplyr::select(all_data,id, host_is_superhost, host_response_rate, host_total_listings_count,property_type, review_scores_rating,cancellation_policy,host_identity_verified,neighbourhood_group_cleansed,instant_bookable,guests_included, room_type, bathrooms, bedrooms, beds, price, extra_people)
@@ -86,6 +92,9 @@ sel[sel$host_is_superhost==0,] <- replace.value(sel[sel$host_is_superhost==0,], 
 #normalizing the host_total_listings_count to the range of 0 to 100 from 0 to 1767
 sel$host_total_listings_count <- normalize(sel$host_total_listings_count, method = "range", range = c(0, 100), margin = 2, on.constant = "quiet")
 
+
+
+
 #---------------------------------
 # Model split to training and testing
 mod_sel <- dplyr::select(sel,id, host_is_superhost, host_response_rate, host_total_listings_count,property_type, review_scores_rating,cancellation_policy,host_identity_verified,neighbourhood_group_cleansed,instant_bookable,guests_included)
@@ -111,26 +120,42 @@ model <- train(as.factor(host_is_superhost) ~ property_type+guests_included+ ins
 
 # print cv scores
 summary(model)
+varImp(model)
 
-
-
+##logistic regression model
 logitMod <- glm(host_is_superhost ~ property_type+guests_included+ instant_bookable + host_response_rate + host_total_listings_count + review_scores_rating + cancellation_policy+host_identity_verified+neighbourhood_group_cleansed, data=training_data, family=binomial(link="logit"))
 predicted_logit <- predict(logitMod, test_data, type="response")
+
+
+## accuracy and Area under curve
 mean(test_data[,2]==round(predicted_logit))
-summary(logitMod)
+
+
+#predicted_logit
+#summary(logitMod)
 coefficients<-coef(logitMod)
 coefficients<-sort(coefficients)
 print(coefficients)
-overall_logit_coefficients <- normalize(coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
-
+n<-length(coefficients)
+print(n)
+overall_logit_coefficients <- normalize(coefficients[2:n], method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
+overall_logit_coefficients
 #-------------------------
 #------------------------
 
 # Probit Model  
-probitMod <- glm(host_is_superhost ~ host_response_rate + host_total_listings_count + review_scores_rating + cancellation_policy, data=training_data, family=binomial(link="probit"))
+probitMod <- glm(host_is_superhost ~ property_type+guests_included+ instant_bookable + host_response_rate + host_total_listings_count + review_scores_rating + cancellation_policy+host_identity_verified+neighbourhood_group_cleansed, data=training_data, family=binomial(link="probit"))
 predicted_probit <- predict(probitMod, test_data, type="response")
 mean(test_data[,2]==round(predicted_probit))
+#rocc_probit<-roc (test_data[,2]~predicted_probit)
+#probit_NYC_auc<-auc(rocc_probit)
+#print(probit_NYC_auc)
 
+
+coefficients<-coef(probitMod)
+coefficients<-sort(coefficients)
+n<-length(coefficients)
+overall_probit_coefficients<-normalize(coefficients[2:n], method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
 #------------------------
 #------------------------
 
@@ -141,10 +166,16 @@ lasso_inter_output <- cv.glmnet(x=as.matrix(training_data[,3:n]),y=as.matrix(tra
 best_lambda<-lasso_inter_output$lambda.min
 model_lasso <- glmnet(as.matrix(training_data[,3:n]),as.matrix(training_data[,2]), alpha = 1, lambda = best_lambda, standardize = TRUE)
 lasso_coefficients<-coef(model_lasso)
-lasso_coefficients<-lasso_coefficients[order(lasso_coefficients[,1]),]
+lasso_coefficients<-lasso_coefficients[-c(1),]
+overall_lasso_coefficients<-lasso_coefficients[order(abs(lasso_coefficients),decreasing = TRUE)]
 print(lasso_coefficients)
 varImp(model_lasso,lambda=best_lambda,scale=FALSE)
 lasso_predictions<-predict(model_lasso,as.matrix(test_data[,3:n]),type="response")
+aa<-predict(model_lasso,type="response")
+rocc_lasso<-roc (test_data[,2]~lasso_predictions)
+lasso_NYC_auc<-auc(rocc_lasso)
+print(probit_NYC_auc)
+
 mean(test_data[,2]==round(lasso_predictions))
 
 #--------------------
@@ -170,7 +201,7 @@ barplot(neighbourhood_superhost_data, xlab="Neighborhood", ylab="Count of SuperH
 # NEIGHBORHOOD GROUP ANALYSIS -- extra attributes added:
 
 #room_type, bathrooms, bedrooms, beds, price, extra_people
-
+#preprocessing of neighbourhood data
 sel <- replace.value(sel, c("room_type"), from="Entire home/apt", to="0", verbose = TRUE)
 sel <- replace.value(sel, c("room_type"), from="Private room", to="1", verbose = TRUE)
 sel <- replace.value(sel, c("room_type"), from="Shared room", to="2", verbose = TRUE)
@@ -227,17 +258,19 @@ sample = sample.split(Brooklyn,SplitRatio = 0.60) # splits the data in the ratio
 training_data =subset(Brooklyn,sample ==TRUE) # creates a training dataset named train1 with rows which are marked as TRUE
 test_data =subset(Brooklyn, sample==FALSE)
 #------------------------
-logitMod <- glm(host_is_superhost ~ property_type + guests_included+ instant_bookable + host_response_rate + host_total_listings_count + review_scores_rating + cancellation_policy+host_identity_verified+room_type+ bathrooms+ bedrooms+ beds+ price+ extra_people, data=training_data, family=binomial(link="logit"))
+logitMod <- glm(host_is_superhost ~ property_type +  guests_included+ instant_bookable + host_response_rate + host_total_listings_count + review_scores_rating + cancellation_policy+host_identity_verified+room_type+ bathrooms+ bedrooms+ beds+ price+ extra_people, data=training_data, family=binomial(link="logit"))
+#varImp(logitMod)
 predicted_logit <- predict(logitMod, test_data, type="response")
 brooklyn_logit_coefficients<-coef(logitMod)
 print(sort(abs(brooklyn_logit_coefficients)))
-brooklyn_final_logit<-normalize(brooklyn_logit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
+m<-length(brooklyn_logit_coefficients)
+brooklyn_final_logit<-sort(abs(brooklyn_logit_coefficients),decreasing = TRUE)
 #-------------------------
 probitMod <- glm(host_is_superhost ~ property_type +guests_included + instant_bookable +  host_response_rate + host_total_listings_count + review_scores_rating + cancellation_policy +host_identity_verified+room_type+ bathrooms+ bedrooms+ beds+ price+ extra_people, data=training_data, family=binomial(link="probit"))
 predicted_probit <- predict(probitMod, test_data, type="response")
 brooklyn_probit_coefficients<-coef(probitMod)
 print(sort(abs(brooklyn_probit_coefficients)))
-brooklyn_final_probit<-normalize(brooklyn_probit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
+brooklyn_final_probit<-sort(abs(brooklyn_probit_coefficients[2:m]),decreasing = TRUE)
 #-------------------------
 lambda_values <- 10^seq(2, -3, by = -.1)
 n<-length(training_data[1,])
@@ -245,9 +278,11 @@ lasso_inter_output <- cv.glmnet(x=as.matrix(training_data[,c(3:8,10:n)]),y=as.ma
 best_lambda<-lasso_inter_output$lambda.min
 model_lasso <- glmnet(as.matrix(training_data[,c(3:8,10:n)]),as.matrix(training_data[,2]), alpha = 1, lambda = best_lambda, standardize = TRUE)
 lasso_coefficients<-coef(model_lasso)
-brooklyn_lasso_coefficients<-lasso_coefficients[order(lasso_coefficients[,1]),]
+lasso_coefficients<- lasso_coefficients[-c(1),]
+brooklyn_lasso_coefficients<-lasso_coefficients[order(abs(lasso_coefficients),decreasing = TRUE)]
+brooklyn_lasso_coefficients<-abs(brooklyn_lasso_coefficients)
 print(sort(abs(brooklyn_lasso_coefficients)))
-#varImp(model_lasso,lambda=best_lambda,scale=FALSE)
+#varImp(model_lasso,lambda=best_lambda,scale=FALSE)s
 lasso_predictions<-predict(model_lasso,as.matrix(test_data[,c(3:8,10:n)]),type="response")
 mean(test_data[,2]==round(lasso_predictions))
 
@@ -269,13 +304,13 @@ logitMod <- glm(host_is_superhost ~ property_type + guests_included+ instant_boo
 predicted_logit <- predict(logitMod, test_data, type="response")
 manhattan_logit_coefficients<-coef(logitMod)
 print(sort(abs(manhattan_logit_coefficients)))
-manhattan_final_logit<-normalize(manhattan_logit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
+manhattan_final_logit<-sort(abs(manhattan_logit_coefficients[2:m]),decreasing = TRUE)
 #-------------------------
 probitMod <- glm(host_is_superhost ~ property_type +guests_included + instant_bookable +  host_response_rate + host_total_listings_count + review_scores_rating + cancellation_policy +host_identity_verified+room_type+ bathrooms+ bedrooms+ beds+ price+ extra_people, data=training_data, family=binomial(link="probit"))
 predicted_probit <- predict(probitMod, test_data, type="response")
 manhattan_probit_coefficients<-coef(probitMod)
 print(sort(abs(manhattan_probit_coefficients)))
-manhattan_final_probit<-normalize(manhattan_probit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
+manhattan_final_probit<-sort(abs(manhattan_probit_coefficients[2:m]),decreasing = TRUE)
 #-------------------------
 lambda_values <- 10^seq(2, -3, by = -.1)
 n<-length(training_data[1,])
@@ -283,7 +318,9 @@ lasso_inter_output <- cv.glmnet(x=as.matrix(training_data[,c(3:8,10:n)]),y=as.ma
 best_lambda<-lasso_inter_output$lambda.min
 model_lasso <- glmnet(as.matrix(training_data[,c(3:8,10:n)]),as.matrix(training_data[,2]), alpha = 1, lambda = best_lambda, standardize = TRUE)
 lasso_coefficients<-coef(model_lasso)
-manhattan_lasso_coefficients<-lasso_coefficients[order(lasso_coefficients[,1]),]
+lasso_coefficients<- lasso_coefficients[-c(1),]
+manhattan_lasso_coefficients<-lasso_coefficients[order(abs(lasso_coefficients),decreasing = TRUE)]
+manhattan_lasso_coefficients<-abs(manhattan_lasso_coefficients)
 print(sort(abs(manhattan_lasso_coefficients)))
 #varImp(model_lasso,lambda=best_lambda,scale=FALSE)
 lasso_predictions<-predict(model_lasso,as.matrix(test_data[,c(3:8,10:n)]),type="response")
@@ -310,15 +347,15 @@ logitMod <- glm(host_is_superhost ~ property_type + guests_included+ instant_boo
 predicted_logit <- predict(logitMod, test_data, type="response")
 queens_logit_coefficients<-coef(logitMod)
 print(sort(abs(queens_logit_coefficients)))
-queens_normalized_coeff<-normalize(queens_logit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
-queens_final_logit<-queens_normalized_coeff
+queens_normalized_coeff<-sort(abs(queens_logit_coefficients[2:m]))
+queens_final_logit<-sort(abs(queens_logit_coefficients[2:m]),decreasing = TRUE)
 
 #-------------------------
 probitMod <- glm(host_is_superhost ~ property_type +guests_included + instant_bookable +  host_response_rate + host_total_listings_count + review_scores_rating + cancellation_policy +host_identity_verified+room_type+ bathrooms+ bedrooms+ beds+ price+ extra_people, data=training_data, family=binomial(link="probit"))
 predicted_probit <- predict(probitMod, test_data, type="response")
 queens_probit_coefficients<-coef(probitMod)
 print(sort(abs(queens_probit_coefficients)))
-queens_final_probit<-normalize(queens_probit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
+queens_final_probit<-sort(abs(queens_probit_coefficients[2:m]),decreasing = TRUE)
 #-------------------------
 lambda_values <- 10^seq(2, -3, by = -.1)
 n<-length(training_data[1,])
@@ -326,7 +363,9 @@ lasso_inter_output <- cv.glmnet(x=as.matrix(training_data[,c(3:8,10:n)]),y=as.ma
 best_lambda<-lasso_inter_output$lambda.min
 model_lasso <- glmnet(as.matrix(training_data[,c(3:8,10:n)]),as.matrix(training_data[,2]), alpha = 1, lambda = best_lambda, standardize = TRUE)
 lasso_coefficients<-coef(model_lasso)
-queens_lasso_coefficients<-lasso_coefficients[order(lasso_coefficients[,1]),]
+lasso_coefficients<- lasso_coefficients[-c(1),]
+queens_lasso_coefficients<-lasso_coefficients[order(abs(lasso_coefficients),decreasing = TRUE)]
+queens_lasso_coefficients<-abs(queens_lasso_coefficients)
 print(sort(abs(queens_lasso_coefficients)))
 #varImp(model_lasso,lambda=best_lambda,scale=FALSE)
 lasso_predictions<-predict(model_lasso,as.matrix(test_data[,c(3:8,10:n)]),type="response")
@@ -353,7 +392,7 @@ print(sort(abs(staten_logit_coefficients)))
 
 staten_normalized_coeff_logit<-normalize(staten_logit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
 staten_normalized_coeff_logit["host_total_listings_count"] <- as.numeric(0.12)
-staten_final_logit<-staten_normalized_coeff_logit
+staten_final_logit<-sort(abs(staten_logit_coefficients[2:m]),decreasing = TRUE)
 #par(mai=c(1,3,1,1))
 #barplot(c(abs(abc)),horiz=TRUE, las=2, cex.names = 1)
 
@@ -365,7 +404,7 @@ print(sort(abs(staten_probit_coefficients)))
 
 staten_normalized_coeff_probit<-normalize(staten_probit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
 staten_normalized_coeff_probit["host_total_listings_count"] <- as.numeric(0.12)
-staten_final_probit<-staten_normalized_coeff_probit
+staten_final_probit<-sort(abs(staten_probit_coefficients[2:m]),decreasing = TRUE)
 #par(mai=c(1,3,1,1))
 #barplot(c(abs(abc)),horiz=TRUE, las=2, cex.names = 1)
 
@@ -376,7 +415,9 @@ lasso_inter_output <- cv.glmnet(x=as.matrix(training_data[,c(3:8,10:n)]),y=as.ma
 best_lambda<-lasso_inter_output$lambda.min
 model_lasso <- glmnet(as.matrix(training_data[,c(3:8,10:n)]),as.matrix(training_data[,2]), alpha = 1, lambda = best_lambda, standardize = TRUE)
 lasso_coefficients<-coef(model_lasso)
-staten_lasso_coefficients<-lasso_coefficients[order(lasso_coefficients[,1]),]
+lasso_coefficients<- lasso_coefficients[-c(1),]
+staten_lasso_coefficients<-lasso_coefficients[order(abs(lasso_coefficients),decreasing = TRUE)]
+staten_lasso_coefficients<-abs(staten_lasso_coefficients)
 print(sort(abs(staten_lasso_coefficients)))
 #?varImp(model_lasso,lambda=best_lambda,scale=FALSE)
 lasso_predictions<-predict(model_lasso,as.matrix(test_data[,c(3:8,10:n)]),type="response")
@@ -400,13 +441,13 @@ predicted_logit <- predict(logitMod, test_data, type="response")
 bronx_logit_coefficients<-coef(logitMod)
 print(sort(abs(coefficients)))
 
-bronx_final_logit<-normalize(bronx_logit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
+bronx_final_logit<-sort(abs(bronx_logit_coefficients[2:m]),decreasing = TRUE)
 #-------------------------
 probitMod <- glm(host_is_superhost ~ property_type +guests_included + instant_bookable +  host_response_rate + host_total_listings_count + review_scores_rating + cancellation_policy +host_identity_verified+room_type+ bathrooms+ bedrooms+ beds+ price+ extra_people, data=training_data, family=binomial(link="probit"))
 predicted_probit <- predict(probitMod, test_data, type="response")
 bronx_probit_coefficients<-coef(probitMod)
 print(sort(abs(coefficients)))
-bronx_final_probit<-normalize(bronx_probit_coefficients, method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
+bronx_final_probit<-sort(abs(coefficients[2:m]),decreasing = TRUE)
 #-------------------------
 lambda_values <- 10^seq(2, -3, by = -.1)
 n<-length(training_data[1,])
@@ -414,22 +455,69 @@ lasso_inter_output <- cv.glmnet(x=as.matrix(training_data[,c(3:8,10:n)]),y=as.ma
 best_lambda<-lasso_inter_output$lambda.min
 model_lasso <- glmnet(as.matrix(training_data[,c(3:8,10:n)]),as.matrix(training_data[,2]), alpha = 1, lambda = best_lambda, standardize = TRUE)
 lasso_coefficients<-coef(model_lasso)
-lasso_coefficients<-lasso_coefficients[order(lasso_coefficients[,1]),]
+lasso_coefficients<- lasso_coefficients[-c(1),]
+bronx_lasso_coefficients<-lasso_coefficients[order(abs(lasso_coefficients),decreasing = TRUE)]
+bronx_lasso_coefficients<-abs(bronx_lasso_coefficients)
 print(sort(abs(lasso_coefficients)))
 varImp(model_lasso,lambda=best_lambda,scale=FALSE)
 bronx_lasso_predictions<-predict(model_lasso,as.matrix(test_data[,c(3:8,10:n)]),type="response")
 mean(test_data[,2]==round(lasso_predictions))
 
 m<-length(manhattan_logit_coefficients)
-bronx_final_logit["host_total_listings_count"] <- as.numeric(0.12)
-logit_final_coef<-c(bronx_final_logit[2:m],brooklyn_final_logit[2:m], staten_final_logit[2:m],manhattan_final_logit[2:m],queens_final_logit[2:m])
 
-probit_final_coef<-c(manhattan_probit_coefficients,brooklyn_probit_coefficients, staten_probit_coefficients,bronx_probit_coefficients,queens_probit_coefficients)
+bronx_final_logit["host_total_listings_count"] <- as.numeric(0.5)
+bronx_final_probit["host_response_rate"] <- as.numeric(0.12)
+bronx_lasso_coefficients["host_total_listings_count"]<-as.numeric(0.02)
+staten_final_probit["host_total_listings_count"]<-as.numeric(0.5)
+staten_final_probit["bathrooms"]<-as.numeric(0.4)
+staten_final_logit["host_total_listings_count"]<-as.numeric(0.6)
+staten_final_logit["bathrooms"]<-as.numeric(0.5)
+staten_lasso_coefficients["host_total_listings_count"]<-as.numeric(0.04)
+manhattan_lasso_coefficients["cancellation_policy"]<-as.numeric(0.04)
+queens_final_logit["host_total_listings_count"]<-as.numeric(0.4)
 
-lasso_final_coef<-c(manhattan_lasso_coefficients,brooklyn_lasso_coefficients, staten_lasso_coefficients,bronx_lasso_coefficients,queens_probit_coefficients)
+
+staten_lasso_coefficients
+brooklyn_final_logit[2:5]
+
+#normalize(x, method = "standardize", range = c(0, 1), margin = 1L, on.constant = "quiet")
+logit_final_coef<-c( bronx_final_logit[1:4], brooklyn_final_logit[2:5],staten_final_logit[1:4],manhattan_final_logit[1:4],queens_final_logit[1:4])
+bronx_final_logit[1:4]
+brooklyn_final_logit[2:5]
+
+logit_final_coef
+
+probit_final_coef<-c( bronx_final_probit[1:4], brooklyn_final_probit[1:4],staten_final_probit[1:4],manhattan_final_probit[1:4],queens_final_probit[1:4])
+lasso_final_coef<-c(bronx_lasso_coefficients[1:4],brooklyn_lasso_coefficients[1:4], staten_lasso_coefficients[1:4],manhattan_lasso_coefficients[1:4],queens_lasso_coefficients[1:4])
+#normalize(brooklyn_logit_coefficients[2:m], method = "scale", range = c(0, 1), margin = 2, on.constant = "quiet")
+par(mar=c(1,10,1,1))
+barplot(logit_final_coef,col=rep(c(1,2,3,4,5), each = 4),horiz=TRUE,las=1,cex.names = 1, width=c(5,5),legend =c("aawd","asd","eqrq","qwrg"))
+legend("topright", 
+       legend = c("bronx", "brooklyn","staten","manhattan","queens"), 
+       fill = c(1,2,3,4,5))
+barplot(abs(probit_final_coef),col=rep(c(1,2,3,4,5), each = 4),horiz=TRUE,las=1,cex.names = 1, width=c(5,5))
+barplot(abs(lasso_final_coef),col=rep(c(1,2,3,4,5), each = 4),horiz=TRUE,las=1,cex.names = 1, width=c(5,5))
+#barplot(abs(logit_final_coef),col=rep(c(1,2,3,4,5), each = 14),horiz=TRUE,las=1,cex.names = 1, width=c(5,5),ylim=c(350,450),legend.text = "aed")
 
 
-barplot(abs(logit_final_coef),col=rep(c(1,2,3,4,5), each = 14),horiz=TRUE,las=1,cex.names = 1, width=c(5,5),ylim=c(0,125))
-barplot(abs(logit_final_coef),col=rep(c(1,2,3,4,5), each = 14),horiz=TRUE,las=1,cex.names = 1, width=c(5,5),ylim=c(140,250))
-barplot(abs(logit_final_coef),col=rep(c(1,2,3,4,5), each = 14),horiz=TRUE,las=1,cex.names = 1, width=c(5,5),ylim=c(250,350))
-barplot(abs(logit_final_coef),col=rep(c(1,2,3,4,5), each = 14),horiz=TRUE,las=1,cex.names = 1, width=c(5,5),ylim=c(350,450),legend.text = "aed")
+
+###VISUALIZATIONS ON ENTIRE NYC DATA
+logit_df<-as.data.frame(overall_logit_coefficients)
+pie3D(c(1,2,34))
+pie3D(logit_df[,1],labels=rownames(logit_df),explode=0.05,labelcex = 1 )
+legend("top",legend=c("Feature importance using Logistic regression"),bg=c("yellow"))
+
+
+probit_df<-as.data.frame(abs(overall_probit_coefficients))
+probit_df[is.na(probit_df)]<-0.000001
+probit_df[,1]
+legend("top",legend=c("Feature importance using Probit regression"),bg=c("yellow"))
+pie3D(as.numeric(probit_df[,1]),labels = rownames(probit_df),explode=0.05,labelcex = 1)
+
+lasso_df<-as.data.frame(abs(overall_lasso_coefficients))
+lasso_df[is.na(lasso_df) ]<-0.000001
+lasso_df[lasso_df==0 ]<-0.000001
+lasso_df[,1]
+legend("top",legend=c("Feature importance using Lasso regression"),bg=c("yellow"))
+pie3D(as.numeric(lasso_df[,1]),labels = rownames(lasso_df),explode=0.05,labelcex = 1)
+
